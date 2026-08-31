@@ -1,0 +1,1055 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum ActivityType {
+  RUN
+  RIDE
+  SWIM
+  STRENGTH
+  OTHER
+}
+
+enum IntensityClass {
+  EASY
+  STEADY
+  TEMPO
+  THRESHOLD
+  INTERVAL
+  LONG
+  RACE
+  RECOVERY
+  OTHER
+}
+
+enum DataSourceType {
+  STRAVA
+  HEVY
+  COLMI
+  MANUAL
+  GARMIN
+  GOOGLE_CALENDAR
+}
+
+enum SessionStatus {
+  PLANNED
+  DONE
+  PARTIALLY_DONE
+  MISSED
+}
+
+enum HealthEventType {
+  BLOOD_TEST
+  HORMONES_TEST
+  IMAGING
+  OTHER_TEST
+  VACCINATION
+  INJURY
+  ILLNESS
+  MEDICATION_START
+  MEDICATION_END
+  SUPPLEMENT_START
+  SUPPLEMENT_END
+  TRAINING_CYCLE_START
+  TRAINING_CYCLE_END
+  NOTE
+}
+
+enum NutrientCategory {
+  VITAMIN
+  MINERAL
+  FATTY_ACID
+  AMINO_ACID
+  HERB
+  PROBIOTIC
+  OTHER
+}
+
+enum ExamStatus {
+  PLANNED // badanie zlecone / do zrobienia (bez wyniku)
+  DONE // badanie wykonane (z wynikiem)
+}
+
+enum VisitStatus {
+  PLANNED // wizyta zaplanowana
+  DONE // wizyta wykonana
+  CANCELLED // wizyta anulowana
+}
+
+// Epizod leczenia — jeden „wątek" leczenia danej części ciała (np. „Uraz łąkotki 2026").
+// Pozwala zamknąć leczenie i zacząć nowe na tej samej części ciała bez mieszania historii.
+enum ReferralStatus {
+  ACTIVE // ważne, do zrealizowania
+  FULFILLED // zrealizowane (odpowiednik legacy isUsed = true)
+  EXPIRED // straciło ważność — liczone przy odczycie, nie zapisywane w tle
+  CANCELLED
+}
+
+enum EpisodeStatus {
+  ACTIVE // leczenie w toku
+  MONITORING // pod obserwacją (np. „kontrola USG za 6 mies.")
+  RESOLVED // zakończone
+}
+
+// ─── Core ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile             UserProfile?
+  dataSources         DataSource[]
+  activities          Activity[]
+  strengthWorkouts    StrengthWorkout[]
+  sleepSessions       SleepSession[]
+  heartRateSamples    HeartRateSample[]
+  dailyMetrics        DailyMetric[]
+  planSessions        TrainingPlanSession[]
+  healthDocuments     HealthDocument[]
+  healthEvents        HealthEvent[]
+  medications         Medication[]
+  supplements         Supplement[]
+  supplementIntakes   SupplementIntake[]
+  bodyMeasurements    BodyMeasurement[]
+  wellnessEntries     WellnessEntry[]
+  syncLogs            SyncLog[]
+  healthIntakes       HealthIntake[]
+  habits              Habit[]
+  medicalVisits       MedicalVisit[]
+  dentalRecords       DentalRecord[]
+  activitySubtypes    ActivitySubtype[]
+  exerciseDefinitions ExerciseDefinition[]
+  referrals           Referral[]
+  conversations       Conversation[]
+  medicalDoctors      MedicalDoctor[]
+  medicalFacilities   MedicalFacility[]
+  bodyParts           BodyPart[]
+  careEpisodes        CareEpisode[]
+  calendarSyncs       CalendarSync[]
+}
+
+// ─── User profile / training config ──────────────────────────────────────────
+
+enum HrZoneMethod {
+  PERCENT_MAX // % of max HR (default)
+  PERCENT_LTHR // % of lactate threshold HR (Friel/Coggan)
+  KARVONEN // Karvonen (HRR-based, needs restHr)
+}
+
+model UserProfile {
+  id            String       @id @default(cuid())
+  userId        String       @unique
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  birthDate     DateTime?
+  sex           String? // "M" | "F" | "X"
+  heightCm      Float?
+  maxHr         Int?
+  restingHr     Int?
+  lthr          Int? // lactate threshold heart rate
+  ftp           Int? // functional threshold power (cycling)
+  vdot          Float? // Daniels VDOT (running)
+  zonesMethod   HrZoneMethod @default(PERCENT_MAX)
+  thresholdPace Float? // s/km (running tempo/threshold pace)
+  settings      Json? // arbitrary user settings (biomarkers dict, etc.)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model DataSource {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           DataSourceType
+  isActive       Boolean        @default(true)
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  lastSyncedAt   DateTime?
+  settings       Json? // type-specific config (e.g. Hevy API key ref, Colmi endpoint)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  syncLogs SyncLog[]
+
+  @@unique([userId, type])
+}
+
+// ─── Activities (Strava / endurance) ─────────────────────────────────────────
+
+model Activity {
+  id                 String         @id @default(cuid())
+  userId             String
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId           String? // external ID (e.g. Strava activity ID)
+  source             DataSourceType
+  type               ActivityType
+  name               String
+  startedAt          DateTime
+  duration           Int // seconds (moving_time)
+  elapsedTime        Int? // total elapsed (incl. pauses)
+  distance           Float? // meters
+  elevGain           Float? // meters
+  elevLow            Float?
+  elevHigh           Float?
+  avgHr              Int?
+  maxHr              Int?
+  avgPace            Float? // seconds per km
+  avgSpeed           Float? // m/s
+  maxSpeed           Float? // m/s
+  avgCadence         Float?
+  avgWatts           Float?
+  weightedAvgWatts   Int? // np_normalized
+  maxWatts           Int?
+  kilojoules         Float?
+  avgTemp            Float?
+  sufferScore        Int?
+  calories           Int?
+  description        String?
+  externalUrl        String?
+  gearId             String?
+  deviceName         String?
+  startLat           Float?
+  startLng           Float?
+  endLat             Float?
+  endLng             Float?
+  mapPolyline        String? // encoded polyline (full route)
+  mapSummaryPolyline String? // shorter summary
+  kudosCount         Int?
+  commentCount       Int?
+  prCount            Int?
+  achievementCount   Int?
+
+  // ── User-supplied / derived analytics ─────────────────────────────────────
+  moodScore              Int? // 1-5 post-workout reflection
+  moodNote               String?
+  intensityClass         IntensityClass? // auto or manual
+  intensityClassOverride Boolean         @default(false) // true = user pinned, don't auto-update
+  vdotEstimate           Float? // Daniels VDOT (only computed for qualifying runs)
+  zoneMinutes            Json? // {z1,z2,z3,z4,z5} minutes per HR zone (computed from streams)
+  paceZoneMinutes        Json? // similar for pace zones (running)
+
+  // ── Raw source payloads (kept for re-processing without API calls) ────────
+  rawData Json? // detailed activity object (incl. splits/laps/segments)
+  streams Json? // streams object: { heartrate: [...], time: [...], ... }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessionStatuses TrainingSessionStatus[]
+
+  @@unique([userId, sourceId, source])
+  @@index([userId, startedAt])
+  @@index([userId, type, startedAt])
+}
+
+// ─── Strength workouts (Hevy) ─────────────────────────────────────────────────
+
+model StrengthWorkout {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String?
+  name      String
+  startedAt DateTime
+  duration  Int? // seconds
+  volume    Float? // total kg moved
+  notes     String?
+  moodScore Int? // 1-5
+  moodNote  String?
+  rawData   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  exercises       StrengthExercise[]
+  sessionStatuses TrainingSessionStatus[]
+
+  @@unique([userId, sourceId])
+  @@index([userId, startedAt])
+}
+
+model StrengthExercise {
+  id                   String              @id @default(cuid())
+  workoutId            String
+  workout              StrengthWorkout     @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  sourceId             String?
+  name                 String
+  notes                String?
+  order                Int
+  exerciseDefinitionId String?
+  exerciseDefinition   ExerciseDefinition? @relation(fields: [exerciseDefinitionId], references: [id], onDelete: SetNull)
+
+  sets StrengthSet[]
+}
+
+model StrengthSet {
+  id         String           @id @default(cuid())
+  exerciseId String
+  exercise   StrengthExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  setNumber  Int
+  reps       Int?
+  weight     Float? // kg
+  duration   Int? // seconds (for time-based sets)
+  rpe        Float?
+  isPr       Boolean          @default(false)
+  notes      String?
+}
+
+// ─── Exercise Dictionary ──────────────────────────────────────────────────────
+
+enum ExerciseType {
+  REPS_WEIGHT // Powtórzenia × Ciężar (np. Przysiad ze sztangą)
+  REPS_ONLY // Same powtórzenia bez ciężaru (np. Brzuszki, Pompki)
+  DURATION // Czasowe na minuty/sekundy (np. Orbitrek, Plank)
+}
+
+model ExerciseDefinition {
+  id          String       @id @default(cuid())
+  userId      String? // null = globalne ćwiczenie systemowe, string = zdefiniowane przez użytkownika
+  user        User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String // Nazwa ćwiczenia (np. "Orbitrek", "Brzuszki")
+  muscleGroup String // Zmapowana grupa mięśniowa (np. "CORE", "LEGS")
+  type        ExerciseType @default(REPS_WEIGHT)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  exercises StrengthExercise[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// ─── Colmi ring data ──────────────────────────────────────────────────────────
+
+model SleepSession {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date         DateTime
+  bedAt        DateTime?
+  wakeAt       DateTime?
+  totalMinutes Int?
+  deepMinutes  Int?
+  remMinutes   Int?
+  lightMinutes Int?
+  awakeMinutes Int?
+  efficiency   Float? // 0-100
+  rawData      Json?
+  createdAt    DateTime  @default(now())
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model HeartRateSample {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordedAt DateTime
+  bpm        Int
+  type       String? // resting, active, etc.
+
+  @@index([userId, recordedAt])
+}
+
+model DailyMetric {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime
+  steps          Int?
+  activeCalories Int?
+  totalCalories  Int?
+  restingHr      Int?
+  hrv            Float?
+  spo2           Float?
+  stressScore    Float?
+  rawData        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// ─── Training plan ────────────────────────────────────────────────────────────
+
+model TrainingPlanSession {
+  id             String          @id @default(cuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime
+  type           ActivityType
+  name           String
+  targetDistance Float? // meters
+  targetDuration Int? // seconds
+  targetVolume   Float? // kg (for strength)
+  notes          String?
+  seriesId       String? // grupuje recurring serię (cuid). NULL = single occurrence
+  recurrence     String          @default("NONE") // "NONE" | "WEEKLY"
+  sourceId       String? // external ID (e.g. Runna ICS UID)
+  source         String          @default("MANUAL") // "MANUAL" | "RUNNA"
+  intensityClass IntensityClass? // auto-detected from Runna
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  statuses TrainingSessionStatus[]
+
+  @@unique([userId, sourceId])
+  @@index([userId, date])
+  @@index([seriesId])
+}
+
+model TrainingSessionStatus {
+  id              String              @id @default(cuid())
+  planSessionId   String
+  planSession     TrainingPlanSession @relation(fields: [planSessionId], references: [id], onDelete: Cascade)
+  status          SessionStatus       @default(PLANNED)
+  activityId      String?
+  activity        Activity?           @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  strengthId      String?
+  strengthWorkout StrengthWorkout?    @relation(fields: [strengthId], references: [id], onDelete: SetNull)
+  matchScore      Float?
+  overriddenAt    DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([planSessionId])
+}
+
+// ─── Health intake: universal file upload + AI classification ───────────────
+//
+// Every uploaded photo/PDF lands here first. Gemini classifies it; routing
+// then extracts structured data into specialized models (BodyMeasurement,
+// HealthDocument, etc). Original file kept in storage for audit/re-process.
+
+enum IntakeKind {
+  BODY_COMPOSITION // smart scale screenshot / report
+  BLOOD_TEST // lab test (PDF or photo)
+  HORMONES_TEST
+  IMAGING_REPORT // MRI/USG/X-ray etc.
+  MEDICATION_LABEL
+  SUPPLEMENT_LABEL
+  WELLNESS_REPORT // generic wearable summary
+  PRESCRIPTION
+  OTHER // AI couldn't classify or unsupported type
+}
+
+enum IntakeStatus {
+  UPLOADED // file stored, not yet classified
+  CLASSIFYING // Gemini classification in flight
+  CLASSIFIED // classification done, no action yet
+  EXTRACTED // structured data extracted into target table
+  REVIEWED // user reviewed and accepted/edited
+  FAILED // classification or extraction errored (see error)
+  REJECTED // user discarded the result
+}
+
+model HealthIntake {
+  id         String @id @default(cuid())
+  userId     String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName   String
+  mimeType   String
+  fileSize   Int
+  storageKey String // path/key in storage driver (e.g. "intakes/<id>/file.jpg")
+  storageUrl String // serve URL (auth-checked endpoint)
+
+  kind           IntakeKind? // null until classified
+  confidence     Float? // 0-1, AI confidence in classification
+  classification Json? // full classifier response (label, reason, fields detected)
+
+  status IntakeStatus @default(UPLOADED)
+  error  String?
+  notes  String?
+
+  // ── Foreign refs to wherever data ended up ─────────────────────────────
+  bodyMeasurementId String?
+  bodyMeasurement   BodyMeasurement? @relation(fields: [bodyMeasurementId], references: [id], onDelete: SetNull)
+  healthDocumentId  String?
+  healthDocument    HealthDocument?  @relation(fields: [healthDocumentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, kind])
+  @@index([userId, status])
+}
+
+// ─── Health records ───────────────────────────────────────────────────────────
+
+model HealthDocument {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  type        String // BLOOD_TEST, HORMONES, IMAGING, etc.
+  studyDate   DateTime // dla PLANNED = planowany termin; dla DONE = faktyczna data
+  laboratory  String? // [legacy] wolny tekst — zastąpione przez facilityRef
+  doctor      String? // [legacy] wolny tekst — zastąpione przez performingDoctor
+  description String?
+  tags        Json?
+  fileUrl     String?
+  parameters  Json? // structured key-value results
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Status „do zrobienia vs zrobione" oraz powiązania z wizytą / częścią ciała / słownikami
+  status             ExamStatus @default(DONE)
+  plannedDate        DateTime? // planowany termin (dla PLANNED)
+  bodyPartId         String?
+  visitId            String? // podpięcie do wizyty (zastępuje JSON MedicalVisit.documentIds)
+  orderingDoctorId   String? // kto zlecił
+  performingDoctorId String? // kto wykonał (osoba)
+  facilityId         String? // gdzie wykonano (placówka)
+  episodeId          String? // epizod leczenia (wątek), do którego należy badanie
+
+  // Kontrola zalecona w opisie badania („kontrola USG za 6 mies.") — dotąd miał
+  // to wyłącznie MedicalVisit.
+  followUpDate DateTime?
+  followUpNote String?
+  // Ostatnie propozycje AI + decyzja użytkownika (przyjęte/odrzucone). Trzymane,
+  // żeby po odświeżeniu strony nie znikły i żeby nie pytać drugi raz o odrzucone.
+  aiSuggestions Json?
+
+  healthEvent HealthEvent?
+  intakes     HealthIntake[]
+  fulfilledReferrals Referral[] @relation("ReferralFulfilledByDocument")
+
+  bodyPart         BodyPart?        @relation(fields: [bodyPartId], references: [id], onDelete: SetNull)
+  visit            MedicalVisit?    @relation(fields: [visitId], references: [id], onDelete: SetNull)
+  orderingDoctor   MedicalDoctor?   @relation("OrderingDoctor", fields: [orderingDoctorId], references: [id], onDelete: SetNull)
+  performingDoctor MedicalDoctor?   @relation("PerformingDoctor", fields: [performingDoctorId], references: [id], onDelete: SetNull)
+  facilityRef      MedicalFacility? @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  episode          CareEpisode?     @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+
+  @@index([userId, studyDate])
+  @@index([userId, status])
+  @@index([bodyPartId])
+  @@index([visitId])
+  @@index([episodeId])
+}
+
+model HealthEvent {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        HealthEventType
+  date        DateTime
+  title       String
+  description String?
+  documentId  String?         @unique
+  document    HealthDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId, date])
+}
+
+model Medication {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  dose      String?
+  frequency String?
+  startDate DateTime
+  endDate   DateTime?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Historia dawek = kilka rekordów o tej samej nazwie (wariant A): zmiana dawki
+  // zamyka bieżący wpis przez `endDate` i tworzy nowy. Osobny model dawek
+  // (`MedicationDose`) dopiero gdy będzie potrzebny wykres „dawka w czasie".
+  episodeId String?
+  episode   CareEpisode? @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([episodeId])
+}
+
+model Supplement {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  productName String? // product name from label (AI-extracted)
+  company     String? // manufacturer name (AI-extracted)
+  dose        String? // legacy free-text dose description (kept for backward compat)
+  servingSize Float? // canonical portion (e.g. 2 tablets, 1 capsule). 1 portion = full ingredients amounts
+  servingUnit String? // "tabletka", "kapsułka", "ml", "scoop"
+  goal        String?
+  startDate   DateTime
+  endDate     DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  ingredients SupplementIngredient[]
+  intakes     SupplementIntake[]
+
+  @@index([userId])
+}
+
+model SupplementIngredient {
+  id           String     @id @default(cuid())
+  supplementId String
+  supplement   Supplement @relation(fields: [supplementId], references: [id], onDelete: Cascade)
+  nutrientId   String?
+  nutrient     Nutrient?  @relation(fields: [nutrientId], references: [id], onDelete: SetNull)
+  name         String // raw label name e.g. "Witamina C (kwas L-askorbinowy)"
+  amount       Float? // 500
+  unit         String? // "mg", "μg", "IU", "%"
+  percentDV    Float? // % RWS (Reference Daily Value)
+
+  @@index([supplementId])
+  @@index([nutrientId])
+}
+
+model SupplementIntake {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  supplementId String
+  supplement   Supplement @relation(fields: [supplementId], references: [id], onDelete: Cascade)
+  date         DateTime
+  portion      Float      @default(1) // 0.5 = pół porcji, 1 = pełna, 2 = podwójna
+  takenAt      DateTime   @default(now())
+  notes        String?
+
+  @@index([userId, date])
+  @@index([supplementId, date])
+}
+
+model Nutrient {
+  id          String           @id @default(cuid())
+  slug        String           @unique // "vitamin-c", "magnesium", "omega-3"
+  name        String // "Witamina C"
+  nameEn      String? // "Vitamin C"
+  category    NutrientCategory
+  defaultUnit String // "mg", "μg", "IU", "g"
+  rda         Float? // referencyjna wartość spożycia (RWS) per defaultUnit
+  upperLimit  Float? // tolerable upper intake (UL)
+  aliases     Json?
+  description String?
+  sortOrder   Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  ingredients SupplementIngredient[]
+
+  @@index([category, sortOrder])
+}
+
+model BodyMeasurement {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       DateTime
+  weight     Float? // kg
+  bodyFat    Float? // %
+  muscleMass Float? // kg
+  waist      Float? // cm
+  chest      Float? // cm
+  hips       Float? // cm
+  thigh      Float? // cm
+  bicep      Float? // cm
+  calf       Float? // cm
+  shoulder   Float? // cm
+  height     Float? // cm (rarely changes)
+  notes      String?
+
+  // ── Extended body composition (smart scales: Xiaomi, Tanita, Withings, etc.) ──
+  bmi               Float?
+  leanBodyMass      Float? // kg, fat-free mass
+  boneMass          Float? // kg
+  bodyWaterPct      Float? // %
+  proteinPct        Float? // %
+  visceralFat       Float? // index 1-30
+  basalMetabolism   Int? // BMR kcal
+  metabolicAge      Int? // years
+  bodyType          String? // e.g. "balanced muscular", "obese", "lean"
+  bodyScore         Int? // 0-100 overall (Xiaomi/Withings)
+  idealWeight       Float? // kg, suggested by scale
+  skeletalMusclePct Float? // %
+  measuredAt        DateTime? // exact timestamp from screenshot if visible
+
+  // ── Nowe zaawansowane parametry kompozycji ciała ──
+  waterMass          Float? // kg - Masa wody
+  fatMass            Float? // kg - Masa tłuszczu
+  proteinMass        Float? // kg - Masa białka
+  musclePct          Float? // %  - Procent mięśni
+  bonePct            Float? // %  - Minerały kości procentowe
+  skeletalMuscleMass Float? // kg - Masa mięśni szkieletowych
+  waistToHipRatio    Float? // Szacowane proporcje obwodu pasa do bioder (WHR)
+
+  // ── Source tracking (manual vs AI-extracted from photo/PDF) ───────────────
+  source        String    @default("MANUAL") // "MANUAL" | "PHOTO"
+  sourceLabel   String? // free-text e.g. "Xiaomi Body Scale S400"
+  photoUrl      String? // serve-protected URL to original
+  photoKey      String? // storage key (for delete)
+  extractedAt   DateTime?
+  rawExtraction Json? // full Gemini response, for debug/re-process
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intakes HealthIntake[]
+
+  @@index([userId, date])
+}
+
+model WellnessEntry {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date        DateTime
+  energyScore Int? // 1-10
+  moodScore   Int? // 1-10
+  stressScore Int? // 1-10
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// ─── Sync logs ────────────────────────────────────────────────────────────────
+
+model SyncLog {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dataSourceId String?
+  dataSource   DataSource? @relation(fields: [dataSourceId], references: [id], onDelete: SetNull)
+  triggeredBy  String // "cron" | "manual"
+  status       String // "success" | "error" | "partial"
+  itemsSynced  Int?
+  error        String?
+  startedAt    DateTime
+  finishedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ─── Habits & Habit Tracking ──────────────────────────────────────────────────
+
+enum HabitType {
+  BOOLEAN // Tak/Nie
+  QUANTITY // Np. woda w litrach
+  TIME // Np. sen w godzinach
+}
+
+enum HabitFrequency {
+  DAILY
+  EVERY_X_DAYS
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+model Habit {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  type         HabitType
+  targetValue  Float?
+  unit         String?
+  frequency    HabitFrequency
+  intervalDays Int?
+  step         Float? // krok dla +/- w typach QUANTITY/TIME
+  validFrom    DateTime? // od kiedy ten wariant obowiązuje (null = od zawsze)
+  validTo      DateTime? // do kiedy (null = nadal aktywny)
+  isActive     Boolean        @default(true)
+  order        Int            @default(0)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @default(now()) @updatedAt
+  logs         HabitLog[]
+
+  @@index([userId])
+  @@index([userId, validFrom, validTo])
+}
+
+model HabitLog {
+  id        String   @id @default(cuid())
+  habitId   String
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  date      DateTime
+  completed Boolean  @default(false)
+  value     Float?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([habitId, date])
+  @@index([habitId])
+}
+
+model MedicalVisit {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            DateTime
+  plannedDate     DateTime? // planowany termin (opcjonalny) — dla zaplanowanych wizyt bez ustalonej daty
+  status          VisitStatus @default(DONE) // Zaplanowane / Wykonane / Anulowane
+  doctorName      String // [legacy] wolny tekst — zastąpione przez doctorRef
+  specialization  String // "Kardiolog", "Ortopeda"
+  facility        String? // [legacy] wolny tekst — zastąpione przez facilityRef
+  reason          String // [legacy] wolny tekst — zastąpione przez bodyPart (Powód/Część ciała)
+  summary         String? // najważniejsze wnioski
+  recommendations String? // zalecenia
+  followUpDate    DateTime? // data kolejnej kontroli
+  followUpNote    String? // "Kontrola za 12 mies."
+  documentIds     Json? // [legacy] zastąpione przez HealthDocument.visitId — nigdzie nie odczytywane
+  medicationIds   Json?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Słowniki per-user (nullable FK; stare kolumny tekstowe zostają jako backup)
+  doctorId    String?
+  facilityId  String?
+  bodyPartId  String?
+  episodeId   String?
+  doctorRef   MedicalDoctor?   @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  facilityRef MedicalFacility? @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  bodyPart    BodyPart?        @relation(fields: [bodyPartId], references: [id], onDelete: SetNull)
+  episode     CareEpisode?     @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  documents   HealthDocument[] // badania podpięte do tej wizyty
+
+  fulfilledReferrals Referral[] @relation("ReferralFulfilledByVisit")
+
+  @@index([userId, bodyPartId])
+  @@index([episodeId])
+}
+
+// ─── Słowniki medyczne per-user (Lekarze / Placówki / Powód-Część ciała) ────────
+
+model MedicalDoctor {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  specialization String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  visits             MedicalVisit[]
+  orderedDocuments   HealthDocument[] @relation("OrderingDoctor")
+  performedDocuments HealthDocument[] @relation("PerformingDoctor")
+  dentalRecords      DentalRecord[]   @relation("DentalDentist")
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model MedicalFacility {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  address   String? // adres — wysyłany jako „miejsce" zdarzenia do Kalendarza Google
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  visits        MedicalVisit[]
+  documents     HealthDocument[]
+  dentalRecords DentalRecord[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// „Powód / Część ciała" — oś grupowania wizyt i badań (np. „Tarczyca", „Kolano lewe")
+model BodyPart {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  visits    MedicalVisit[]
+  documents HealthDocument[]
+  episodes  CareEpisode[]
+  referrals Referral[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// Epizod leczenia — wątek leczenia jednej części ciała, z jawnym początkiem i końcem.
+// BodyPart zostaje słownikiem anatomicznym („Kolano lewe" istnieje raz), a epizody pozwalają
+// odróżnić „Uraz łąkotki 2026" od „Ból kolana 2031" bez mieszania wizyt i badań.
+model CareEpisode {
+  id         String        @id @default(cuid())
+  userId     String
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bodyPartId String
+  bodyPart   BodyPart      @relation(fields: [bodyPartId], references: [id], onDelete: Cascade)
+  title      String // „Uraz łąkotki 2026", „AZT — prowadzenie"
+  status     EpisodeStatus @default(ACTIVE)
+  startDate  DateTime
+  endDate    DateTime? // ustawiane przy zamknięciu leczenia
+  outcome    String? // „wyleczone", „przewlekłe — kontrola raz w roku"
+  notes      String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  visits        MedicalVisit[]
+  documents     HealthDocument[]
+  medications   Medication[]
+  dentalRecords DentalRecord[]
+  referrals     Referral[]
+
+  @@index([userId, bodyPartId])
+  @@index([userId, status])
+}
+
+model DentalRecord {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  toothNumber Int? // numeracja zębów FDI (null dla wizyt ogólnych: przegląd, higienizacja)
+  procedure   String // "plomba", "leczenie kanałowe", "korona", "implant"
+  date        DateTime
+  dentist     String? // [legacy] wolny tekst — zastąpione przez dentistRef
+  facility    String? // [legacy] wolny tekst — zastąpione przez facilityRef
+  notes       String?
+  imageUrls   Json?
+  createdAt   DateTime   @default(now())
+  // Kolumna w SQLite jest nullable (ADD COLUMN NOT NULL wysadza się na niepustej
+  // tabeli), ale po backfillu z `createdAt` nie ma w niej NULL-i, a Prisma
+  // uzupełnia ją przy każdym zapisie.
+  updatedAt   DateTime   @updatedAt
+  status      ExamStatus @default(DONE) // PLANNED = zabieg umówiony, DONE = wykonany
+  plannedDate DateTime?
+
+  // Słowniki per-user — te same, co przy wizytach i badaniach.
+  dentistId  String?
+  facilityId String?
+  episodeId  String?
+
+  dentistRef  MedicalDoctor?   @relation("DentalDentist", fields: [dentistId], references: [id], onDelete: SetNull)
+  facilityRef MedicalFacility? @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  episode     CareEpisode?     @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+
+  @@index([userId, date])
+  @@index([episodeId])
+}
+
+model ActivitySubtype {
+  id         String       @id @default(cuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentType ActivityType // STRENGTH, RUN, RIDE, OTHER
+  name       String // "FBW", "Upper", "Easy", "Long", "Interwały"
+  icon       String?
+  color      String?
+  order      Int          @default(0)
+}
+
+model Referral {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title          String // np. "Skierowanie do kardiologa"
+  specialization String // np. "Kardiolog"
+  doctorName     String? // lekarz wystawiający
+  issueDate      DateTime // data wystawienia
+  expiryDate     DateTime? // data ważności
+  code           String? // 4-cyfrowy kod dostępu
+  notes          String?
+  isUsed         Boolean   @default(false) // [legacy] zastąpione przez `status`; nowy kod pisze oba, czyta `status`
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // EXPIRED nie jest zapisywane w tle — status wygaśnięcia liczymy przy odczycie
+  // (`expiryDate < dziś && status === ACTIVE`), żeby nic nie zmieniało danych
+  // bez wiedzy użytkownika.
+  status ReferralStatus @default(ACTIVE)
+
+  episodeId             String?
+  bodyPartId            String?
+  fulfilledByVisitId    String?
+  fulfilledByDocumentId String?
+
+  episode             CareEpisode?    @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  bodyPart            BodyPart?       @relation(fields: [bodyPartId], references: [id], onDelete: SetNull)
+  fulfilledByVisit    MedicalVisit?   @relation("ReferralFulfilledByVisit", fields: [fulfilledByVisitId], references: [id], onDelete: SetNull)
+  fulfilledByDocument HealthDocument? @relation("ReferralFulfilledByDocument", fields: [fulfilledByDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([episodeId])
+  @@index([bodyPartId])
+}
+
+// ─── AI Agents Conversations ──────────────────────────────────────────────────
+
+enum AgentType {
+  DOCTOR
+  TRAINER
+}
+
+/// Powiązanie „pozycja agendy → zdarzenie w Kalendarzu Google" (poz. 9 etap 4).
+///
+/// `agendaItemId` to stabilny klucz z `collectAgendaItems()` (np. `visit-<id>`),
+/// a nie surowe id rekordu — dzięki temu jedna wizyta z zaplanowaną kontrolą
+/// daje dwa niezależne zdarzenia i nie da się ich pomylić.
+///
+/// Tabela jest **stanem synchronizacji, nie dokumentacją medyczną**: skasowanie
+/// jej wpisów niczego nie traci poza wiedzą, co już wysłaliśmy.
+model CalendarSync {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agendaItemId     String
+  googleEventId    String
+  googleCalendarId String
+  /// Hash treści zdarzenia — niezmienione pomijamy zamiast wysyłać co start.
+  lastHash         String
+  lastPushedAt     DateTime
+  createdAt        DateTime @default(now())
+
+  @@unique([userId, agendaItemId])
+  @@index([userId])
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentType AgentType
+  title     String? // auto-generowany z pierwszej wiadomości
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@index([userId, agentType, updatedAt])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant" | "tool"
+  content        String // treść wiadomości (markdown)
+  metadata       String? // JSON: tool calls, tool results, timing info
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}

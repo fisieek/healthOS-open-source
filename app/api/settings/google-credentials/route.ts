@@ -1,0 +1,85 @@
+import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/db";
+import { Prisma } from "@/app/generated/prisma";
+import { hasAppGoogleClient } from "@/lib/constants/google-oauth";
+
+export const runtime = "nodejs";
+
+/**
+ * **Opcjonalny** własny klucz OAuth użytkownika.
+ *
+ * Normalnie logowanie idzie przez klucz wbudowany w aplikację
+ * (`lib/constants/google-oauth.ts`) i użytkownik nie widzi tego ekranu.
+ * Ta trasa obsługuje furtkę dla osób technicznych: zanim aplikacja przejdzie
+ * weryfikację Google, wbudowany klucz obsługuje ograniczoną liczbę kont.
+ */
+export async function GET() {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { userId: session.user.id },
+    select: { settings: true },
+  });
+
+  const s = (profile?.settings ?? {}) as Record<string, unknown>;
+  return NextResponse.json({
+    hasClientId: !!s.googleClientId,
+    hasClientSecret: !!s.googleClientSecret,
+    clientId: (s.googleClientId as string) ?? null,
+    /** Gdy `true`, użytkownik nie musi nic wklejać — wystarczy „Połącz". */
+    usingAppClient: hasAppGoogleClient(),
+    // Adres powrotny do wklejenia w Google Cloud Console — pokazujemy go
+    // w UI, żeby użytkownik nie musiał go składać z głowy.
+    redirectUri: `${process.env.NEXTAUTH_URL}/api/integrations/google-calendar/callback`,
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { clientId, clientSecret } = await req.json();
+  if (!clientId?.trim() || !clientSecret?.trim()) {
+    return NextResponse.json({ error: "Brak wymaganych pól" }, { status: 400 });
+  }
+
+  const existing = await prisma.userProfile.findUnique({
+    where: { userId: session.user.id },
+    select: { settings: true },
+  });
+
+  const settings = (existing?.settings ?? {}) as Record<string, unknown>;
+  settings.googleClientId = clientId.trim();
+  settings.googleClientSecret = clientSecret.trim();
+
+  await prisma.userProfile.upsert({
+    where: { userId: session.user.id },
+    create: { userId: session.user.id, settings: settings as Prisma.InputJsonValue },
+    update: { settings: settings as Prisma.InputJsonValue },
+  });
+
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE() {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const existing = await prisma.userProfile.findUnique({
+    where: { userId: session.user.id },
+    select: { settings: true },
+  });
+
+  const settings = (existing?.settings ?? {}) as Record<string, unknown>;
+  delete settings.googleClientId;
+  delete settings.googleClientSecret;
+
+  await prisma.userProfile.update({
+    where: { userId: session.user.id },
+    data: { settings: settings as Prisma.InputJsonValue },
+  });
+
+  return NextResponse.json({ ok: true });
+}
